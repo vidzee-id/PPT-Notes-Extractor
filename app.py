@@ -1,141 +1,308 @@
+
+import os
+import subprocess
+import tempfile
+from io import BytesIO
+
 import streamlit as st
 from pptx import Presentation
-from moviepy import VideoFileClip
-import tempfile
-import os
+import imageio_ffmpeg
 
-# Create tabs
+
+# --------------------------------------------------
+# PAGE CONFIGURATION
+# --------------------------------------------------
+
+st.set_page_config(
+    page_title="Learning Content Utilities",
+    page_icon="🎓",
+    layout="wide"
+)
+
+st.title("🎓 Learning Content Utilities")
+st.write(
+    "Tools for extracting PowerPoint speaker notes "
+    "and converting video recordings into MP3 audio."
+)
+
+
+# --------------------------------------------------
+# HELPER: EXTRACT SPEAKER NOTES
+# --------------------------------------------------
+
+def extract_ppt_notes(pptx_file):
+    """
+    Extract speaker notes from each PowerPoint slide.
+    Skip empty notes and the default placeholder text.
+    Continue if an individual slide has inaccessible notes.
+    """
+
+    prs = Presentation(pptx_file)
+    notes_list = []
+    skipped_slides = []
+
+    for slide_number, slide in enumerate(prs.slides, start=1):
+        try:
+            notes_slide = slide.notes_slide
+            notes_frame = notes_slide.notes_text_frame
+
+            if notes_frame is None:
+                skipped_slides.append(slide_number)
+                continue
+
+            text = notes_frame.text.strip()
+
+            # Ignore empty/default PowerPoint notes.
+            if not text:
+                continue
+
+            if text.lower() in (
+                "click to add notes",
+                "click to edit master text styles"
+            ):
+                continue
+
+            notes_list.append(
+                f"Slide {slide_number}\n{text}"
+            )
+
+        except (AttributeError, ValueError):
+            skipped_slides.append(slide_number)
+            continue
+
+    return "\n\n".join(notes_list), skipped_slides, len(prs.slides)
+
+
+# --------------------------------------------------
+# HELPER: CONVERT MP4 TO MP3 USING FFMPEG
+# --------------------------------------------------
+
+def convert_mp4_to_mp3(input_path, output_path):
+    """
+    Extract audio from an MP4 file using FFmpeg.
+    Raises an error if the file has no audio or conversion fails.
+    """
+
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i", input_path,
+        "-map", "0:a:0",
+        "-vn",
+        "-codec:a", "libmp3lame",
+        "-q:a", "2",
+        output_path
+    ]
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=3600
+    )
+
+    if result.returncode != 0:
+        error_message = result.stderr or "Unknown FFmpeg error."
+        raise RuntimeError(error_message[-2500:])
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError("The MP3 file could not be created.")
+
+
+# --------------------------------------------------
+# TABS
+# --------------------------------------------------
+
 tab1, tab2 = st.tabs([
     "📄 PPT Notes Extractor",
     "🎥 MP4 to MP3 Extractor"
 ])
 
-# -------------------------
-# TAB 1 - PPT NOTES EXTRACTOR
-# -------------------------
+
+# ==================================================
+# TAB 1: PPT NOTES EXTRACTOR
+# ==================================================
+
 with tab1:
 
-    st.title("PowerPoint Notes Extractor")
-
-    uploaded_file = st.file_uploader(
-        "Upload a PowerPoint file",
-        type=["pptx"],
-        key="ppt_upload"
-    )
-
-    if uploaded_file:
-
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=".pptx"
-        ) as tmp:
-
-            tmp.write(uploaded_file.read())
-            ppt_path = tmp.name
-
-        prs = Presentation(ppt_path)
-
-        all_notes = []
-
-        for slide_num, slide in enumerate(prs.slides, start=1):
-
-            if slide.has_notes_slide:
-
-                notes_text = ""
-
-try:
-    notes_slide = slide.notes_slide
-    notes_text_frame = notes_slide.notes_text_frame
-
-    if notes_text_frame is not None:
-        notes_text = notes_text_frame.text.strip()
-
-except (AttributeError, ValueError):
-    notes_text = ""
-
-                if (
-                    notes_text and
-                    notes_text.lower() != "click to add notes"
-                ):
-
-                    all_notes.append(
-                        f"SLIDE {slide_num}\n\n{notes_text}"
-                    )
-
-        output_text = "\n\n" + ("-" * 50 + "\n\n").join(all_notes)
-
-        st.success(
-            f"Extracted notes from {len(all_notes)} slides."
-        )
-
-        st.download_button(
-            label="Download TXT File",
-            data=output_text,
-            file_name="presentation_notes.txt",
-            mime="text/plain"
-        )
-
-        os.remove(ppt_path)
-
-# -------------------------
-# TAB 2 - MP4 TO MP3
-# -------------------------
-with tab2:
-
-    st.title("MP4 to MP3 Extractor")
+    st.header("📄 PPT Notes Extractor")
 
     st.write(
-        "Upload an MP4 video and download the extracted MP3 audio."
+        "Upload a PowerPoint file to extract its speaker notes "
+        "into a downloadable text file."
+    )
+
+    uploaded_pptx = st.file_uploader(
+        "Upload PowerPoint file",
+        type=["pptx"],
+        key="pptx_upload"
+    )
+
+    if uploaded_pptx is not None:
+
+        st.write(f"**File:** {uploaded_pptx.name}")
+
+        if st.button(
+            "Extract Speaker Notes",
+            key="extract_notes_button"
+        ):
+
+            try:
+                with st.spinner("Extracting speaker notes..."):
+
+                    uploaded_pptx.seek(0)
+
+                    notes_text, skipped_slides, total_slides = (
+                        extract_ppt_notes(uploaded_pptx)
+                    )
+
+                if notes_text.strip():
+
+                    st.success(
+                        f"Notes extracted from a presentation "
+                        f"containing {total_slides} slides."
+                    )
+
+                    st.text_area(
+                        "Extracted Speaker Notes",
+                        value=notes_text,
+                        height=400,
+                        key="extracted_notes_preview"
+                    )
+
+                    st.download_button(
+                        label="⬇️ Download Notes as TXT",
+                        data=notes_text.encode("utf-8"),
+                        file_name=(
+                            os.path.splitext(uploaded_pptx.name)[0]
+                            + "_notes.txt"
+                        ),
+                        mime="text/plain",
+                        key="download_notes_button"
+                    )
+
+                else:
+                    st.warning(
+                        "No speaker notes were found. "
+                        "Check whether the PowerPoint contains notes."
+                    )
+
+                if skipped_slides:
+                    st.warning(
+                        "Notes could not be accessed on slide(s): "
+                        + ", ".join(map(str, skipped_slides))
+                        + ". Other slides were processed normally."
+                    )
+
+            except Exception as e:
+                st.error(
+                    "Could not process this PowerPoint file. "
+                    "Please check that it is a valid, unencrypted "
+                    "PPTX file."
+                )
+                st.exception(e)
+
+
+# ==================================================
+# TAB 2: MP4 TO MP3 EXTRACTOR
+# ==================================================
+
+with tab2:
+
+    st.header("🎥 MP4 to MP3 Extractor")
+
+    st.write(
+        "Upload a video recording to extract its audio "
+        "and download it as an MP3 file."
+    )
+
+    st.info(
+        "Maximum upload size depends on your Streamlit configuration. "
+        "Large videos may take longer to upload and process."
     )
 
     uploaded_video = st.file_uploader(
-        "Upload MP4 Video",
+        "Upload MP4 video",
         type=["mp4"],
-        key="video_upload"
+        key="mp4_upload"
     )
 
-    if uploaded_video:
+    if uploaded_video is not None:
 
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=".mp4"
-        ) as temp_video:
+        file_size_mb = len(uploaded_video.getbuffer()) / (1024 * 1024)
 
-            temp_video.write(uploaded_video.read())
-            video_path = temp_video.name
+        st.write(f"**File:** {uploaded_video.name}")
+        st.write(f"**Size:** {file_size_mb:.2f} MB")
 
-        mp3_path = video_path.replace(".mp4", ".mp3")
+        if st.button(
+            "Extract Audio",
+            key="extract_audio_button"
+        ):
 
-        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
 
-            video = VideoFileClip(video_path)
+                input_path = os.path.join(temp_dir, "input.mp4")
+                output_path = os.path.join(temp_dir, "extracted_audio.mp3")
 
-            video.audio.write_audiofile(
-                mp3_path,
-                logger=None
-            )
+                try:
+                    with st.spinner(
+                        "Extracting audio. Please wait..."
+                    ):
 
-            video.close()
+                        uploaded_video.seek(0)
 
-            st.success("Audio extracted successfully!")
+                        with open(input_path, "wb") as input_file:
+                            input_file.write(uploaded_video.getbuffer())
 
-            with open(mp3_path, "rb") as f:
+                        convert_mp4_to_mp3(input_path, output_path)
 
-                st.download_button(
-                    label="Download MP3",
-                    data=f,
-                    file_name="audio.mp3",
-                    mime="audio/mpeg"
-                )
+                        with open(output_path, "rb") as mp3_file:
+                            mp3_data = mp3_file.read()
 
-        except Exception as e:
+                    st.success("Audio extraction completed!")
 
-            st.error(f"Error: {e}")
+                    st.audio(mp3_data, format="audio/mpeg")
 
-        finally:
+                    original_name = os.path.splitext(
+                        uploaded_video.name
+                    )[0]
 
-            if os.path.exists(video_path):
-                os.remove(video_path)
+                    st.download_button(
+                        label="⬇️ Download MP3",
+                        data=mp3_data,
+                        file_name=original_name + ".mp3",
+                        mime="audio/mpeg",
+                        key="download_mp3_button"
+                    )
 
-            if os.path.exists(mp3_path):
-                os.remove(mp3_path)
+                except subprocess.TimeoutExpired:
+                    st.error(
+                        "Processing took too long. "
+                        "Try a shorter video or process it locally."
+                    )
+
+                except RuntimeError as e:
+                    error_text = str(e)
+
+                    if (
+                        "matches no streams" in error_text.lower()
+                        or "does not contain any stream" in error_text.lower()
+                    ):
+                        st.error(
+                            "No audio track was found in this video. "
+                            "Please upload a video that contains audio."
+                        )
+                    else:
+                        st.error(
+                            "Audio extraction failed. "
+                            "The video may be damaged or use an "
+                            "unsupported codec."
+                        )
+                        with st.expander("Technical details"):
+                            st.code(error_text)
+
+                except Exception as e:
+                    st.error("An unexpected error occurred.")
+                    st.exception(e)
