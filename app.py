@@ -41,7 +41,17 @@ with tab1:
 
             if slide.has_notes_slide:
 
-                notes_text = slide.notes_slide.notes_text_frame.text.strip()
+                notes_text = ""
+
+try:
+    notes_slide = slide.notes_slide
+    notes_text_frame = notes_slide.notes_text_frame
+
+    if notes_text_frame is not None:
+        notes_text = notes_text_frame.text.strip()
+
+except (AttributeError, ValueError):
+    notes_text = ""
 
                 if (
                     notes_text and
