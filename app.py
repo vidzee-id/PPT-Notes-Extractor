@@ -30,16 +30,17 @@ st.write(
 # HELPER: EXTRACT SPEAKER NOTES
 # --------------------------------------------------
 
+
 def extract_ppt_notes(pptx_file):
-    """
-    Extract speaker notes from each PowerPoint slide.
-    Skip empty notes and the default placeholder text.
-    Continue if an individual slide has inaccessible notes.
-    """
+    """Extract speaker notes and report the status of every slide."""
+
+    from pptx.oxml.ns import qn
 
     prs = Presentation(pptx_file)
     notes_list = []
-    skipped_slides = []
+    extracted_slides = []
+    empty_slides = []
+    failed_slides = []
 
     for slide_number, slide in enumerate(prs.slides, start=1):
         try:
@@ -47,31 +48,48 @@ def extract_ppt_notes(pptx_file):
             notes_frame = notes_slide.notes_text_frame
 
             if notes_frame is None:
-                skipped_slides.append(slide_number)
+                empty_slides.append(slide_number)
                 continue
 
-            text = notes_frame.text.strip()
+            paragraphs = []
 
-            # Ignore empty/default PowerPoint notes.
-            if not text:
-                continue
+            for paragraph in notes_frame._txBody.findall(qn("a:p")):
+                parts = []
 
-            if text.lower() in (
+                for element in paragraph.iter():
+                    tag = element.tag.split("}")[-1]
+
+                    if tag in ("t",) and element.text:
+                        parts.append(element.text)
+                    elif tag == "tab":
+                        parts.append("\t")
+
+                paragraph_text = "".join(parts).strip()
+
+                if paragraph_text:
+                    paragraphs.append(paragraph_text)
+
+            text = "\n".join(paragraphs).strip()
+
+            if text and text.lower() not in (
                 "click to add notes",
                 "click to edit master text styles"
             ):
-                continue
+                notes_list.append(f"Slide {slide_number}\n{text}")
+                extracted_slides.append(slide_number)
+            else:
+                empty_slides.append(slide_number)
 
-            notes_list.append(
-                f"Slide {slide_number}\n{text}"
-            )
+        except Exception:
+            failed_slides.append(slide_number)
 
-        except (AttributeError, ValueError):
-            skipped_slides.append(slide_number)
-            continue
-
-    return "\n\n".join(notes_list), skipped_slides, len(prs.slides)
-
+    return {
+        "notes_text": "\n\n".join(notes_list),
+        "total_slides": len(prs.slides),
+        "extracted_slides": extracted_slides,
+        "empty_slides": empty_slides,
+        "failed_slides": failed_slides,
+    }
 
 # --------------------------------------------------
 # HELPER: CONVERT MP4 TO MP3 USING FFMPEG
